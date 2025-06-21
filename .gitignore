@@ -1,0 +1,8 @@
+# Ignore Python virtual environment
+whisper-env/
+
+# Ignore temporary audio files
+*.wav
+
+# Ignore transcription output files
+*.txt 
