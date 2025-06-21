@@ -1,6 +1,8 @@
-# Whisper Transcription Assistant
+# Whisper Transcription Assistant 
 
-This project replaces the default Windows speech-to-text functionality with a more powerful, accurate, and customizable transcription tool powered by OpenAI's Whisper model. It uses an AutoHotkey script to launch a stylish Python GUI, allowing for fast and efficient voice-to-text input in any application.
+Optimized for agentic coding workflows; not designed for ADA compliance.
+
+This project replaces the default Windows speech-to-text functionality with a more powerful, accurate, and customizable transcription tool powered by OpenAI's Whisper model. It uses an AutoHotkey script to launch a stylish Python GUI, allowing for fast and efficient voice-to-text input in any application. 
 
 ## Features
 
