@@ -96,7 +96,10 @@ class WhisperWidget(ctk.CTk):
 
         # ── apply saved mute state ─────────────────────────────────────────────
         if self.cfg["mute_beeps"]:
-            open(MUTE_FLAG, "w").close()
+            try:
+                open(MUTE_FLAG, "w").close()
+            except OSError:
+                pass
         elif os.path.exists(MUTE_FLAG):
             os.remove(MUTE_FLAG)
 
@@ -243,7 +246,10 @@ class WhisperWidget(ctk.CTk):
         self.cfg["mute_beeps"] = not self.cfg["mute_beeps"]
         config.save(self.cfg)
         if self.cfg["mute_beeps"]:
-            open(MUTE_FLAG, "w").close()
+            try:
+                open(MUTE_FLAG, "w").close()
+            except OSError:
+                pass
             self.mute_btn.configure(text="🔇")
         else:
             if os.path.exists(MUTE_FLAG):
@@ -268,7 +274,10 @@ class WhisperWidget(ctk.CTk):
         config.save(self.cfg)
         self.hotkey_btn.configure(text=f"⌨ {display}")
         self.unbind("<KeyPress>")
-        open(HOTKEY_FLAG, "w").close()
+        try:
+            open(HOTKEY_FLAG, "w").close()
+        except OSError:
+            self.hotkey_btn.configure(text=f"⌨ {display}")
 
     def _on_model_change(self, new_model: str):
         if new_model == self._current_model:
@@ -363,18 +372,22 @@ class WhisperWidget(ctk.CTk):
         if self.stream:
             self.stream.stop()
             self.stream.close()
-        if self.recording_data:
+            self.stream = None
+        data = self.recording_data
+        self.recording_data = []
+        model = self.model
+        if data and model is not None:
             self._set_status("Transcribing...", "transcribing")
-            threading.Thread(target=self._transcribe, daemon=True).start()
+            threading.Thread(target=self._transcribe, args=(data, model), daemon=True).start()
         else:
             self._set_status("Ready", "ready")
 
-    def _transcribe(self):
+    def _transcribe(self, data, model):
         try:
-            audio = np.concatenate(self.recording_data, axis=0)
+            audio = np.concatenate(data, axis=0)
             write(OUTPUT_AUDIO, SAMPLE_RATE, audio)
-            result = self.model.transcribe(OUTPUT_AUDIO,
-                                            fp16=torch.cuda.is_available())
+            result = model.transcribe(OUTPUT_AUDIO,
+                                       fp16=torch.cuda.is_available())
             text = result["text"].strip()
             self.after(0, self._show_result, text)
         except Exception as exc:
