@@ -10,6 +10,7 @@ if _os.name == 'nt':
     _subprocess.Popen.__init__ = _popen_no_window
 
 import customtkinter as ctk
+import tkinter as tk
 import sounddevice as sd
 from scipy.io.wavfile import write
 import whisper
@@ -125,8 +126,8 @@ class WhisperWidget(ctk.CTk):
         self.bar.bind("<ButtonRelease-1>", self._drag_end)
 
         # status dot
-        self.dot_canvas = ctk.CTkCanvas(self.bar, width=14, height=14,
-                                         bg=BAR_BG, highlightthickness=0)
+        self.dot_canvas = tk.Canvas(self.bar, width=14, height=14,
+                                     bg=BAR_BG, highlightthickness=0)
         self.dot_canvas.pack(side="left", padx=(10, 4), pady=15)
         self.dot_id = self.dot_canvas.create_oval(1, 1, 13, 13, fill=GRAY, outline="")
 
