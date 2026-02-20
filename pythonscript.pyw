@@ -70,7 +70,7 @@ class WhisperWidget(ctk.CTk):
         super().__init__()
 
         # ── window setup ───────────────────────────────────────────────────────
-        self.title("Whisper")
+        self.title("Whisper Transcription")
         ctk.set_appearance_mode("dark")
         self.configure(fg_color=BG)
         self.overrideredirect(True)
