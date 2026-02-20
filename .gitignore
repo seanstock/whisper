@@ -5,4 +5,5 @@ whisper-env/
 *.wav
 
 # Ignore transcription output files
-*.txt 
+*.txt
+!requirements.txt
