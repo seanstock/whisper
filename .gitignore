@@ -16,3 +16,24 @@ icon.ico
 # Ignore Python bytecode
 __pycache__/
 *.pyc
+
+# PyInstaller build artifacts
+build/
+*.spec
+dist/
+
+# Built app (onedir output)
+Whisper Transcription/
+Whisper Transcription Debug/
+
+# Whisper model cache
+models/
+
+# Windows shortcut (auto-created by the app)
+*.lnk
+
+# Debug log
+debug.log
+
+# User config (window position, etc.)
+config.json

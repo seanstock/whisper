@@ -1,7 +1,12 @@
 # Suppress console windows spawned by ffmpeg (called internally by whisper)
+import os
 import subprocess as _subprocess
-import os as _os
-if _os.name == 'nt':
+import ctypes as _ctypes
+import winreg as _winreg
+
+_AUMID = "WhisperTranscription.1"
+
+if os.name == 'nt':
     _orig_popen_init = _subprocess.Popen.__init__
     def _popen_no_window(self, *args, **kwargs):
         kwargs.setdefault('creationflags', 0)
@@ -9,31 +14,49 @@ if _os.name == 'nt':
         _orig_popen_init(self, *args, **kwargs)
     _subprocess.Popen.__init__ = _popen_no_window
 
+    # Give this process its own taskbar group (separate from pythonw.exe).
+    # Must be called BEFORE the window is created so Windows uses it from the start.
+    _ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(_AUMID)
+
+def _register_aumid_icon(icon_path: str) -> None:
+    """Write HKCU registry entry so Windows knows what icon to show for our AUMID."""
+    key_path = f"SOFTWARE\\Classes\\AppUserModelId\\{_AUMID}"
+    try:
+        key = _winreg.CreateKeyEx(
+            _winreg.HKEY_CURRENT_USER, key_path, 0,
+            _winreg.KEY_SET_VALUE | _winreg.KEY_WOW64_64KEY
+        )
+        _winreg.SetValueEx(key, "DisplayName", 0, _winreg.REG_SZ, "Whisper Transcription")
+        _winreg.SetValueEx(key, "IconUri", 0, _winreg.REG_EXPAND_SZ, icon_path)
+        _winreg.CloseKey(key)
+    except Exception:
+        pass
+
 import customtkinter as ctk
 import tkinter as tk
+from PIL import ImageTk
 import sounddevice as sd
 from scipy.io.wavfile import write
 import whisper
 import threading
 import numpy as np
-import os
-import sys
-import torch
-import time
-
+import sys, torch, time, ctypes, winsound, keyboard
 import config
 import icon_gen
 
+
 # ── paths ──────────────────────────────────────────────────────────────────────
-SCRIPT_DIR      = os.path.dirname(os.path.abspath(__file__))
-OUTPUT_AUDIO    = os.path.join(SCRIPT_DIR, "recorded.wav")
-OUTPUT_TXT      = os.path.join(SCRIPT_DIR, "output.txt")
-START_FLAG      = os.path.join(SCRIPT_DIR, "start.flag")
-STOP_FLAG       = os.path.join(SCRIPT_DIR, "stop.flag")
-SHOW_FLAG       = os.path.join(SCRIPT_DIR, "show.flag")
-MUTE_FLAG       = os.path.join(SCRIPT_DIR, "mute.flag")
-HOTKEY_FLAG     = os.path.join(SCRIPT_DIR, "hotkey_change.flag")
-MODELS_DIR      = os.path.join(SCRIPT_DIR, "models")
+# --onedir: exe is in <project>/<appname>/ → go up one level to project root
+if getattr(sys, 'frozen', False):
+    _exe_dir = os.path.dirname(sys.executable)
+    if os.path.exists(os.path.join(_exe_dir, 'config.py')):
+        SCRIPT_DIR = _exe_dir
+    else:
+        SCRIPT_DIR = os.path.dirname(_exe_dir)
+else:
+    SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+OUTPUT_AUDIO = os.path.join(SCRIPT_DIR, "recorded.wav")
+MODELS_DIR   = os.path.join(SCRIPT_DIR, "models")
 
 SAMPLE_RATE = 16000
 CHANNELS    = 1
@@ -42,18 +65,18 @@ DTYPE       = 'int16'
 ALL_MODELS = ["tiny.en", "base.en", "small.en", "medium.en", "turbo", "large-v3"]
 
 # ── colours ────────────────────────────────────────────────────────────────────
-BG          = "#1a1a1a"
-BAR_BG      = "#222222"
-PANEL_BG    = "#2a2a2a"
-TEXT        = "#e8e8e8"
-SUBTEXT     = "#888888"
-ACCENT      = "#1E90FF"
-RED         = "#C70039"
-AMBER       = "#FFA500"
-GREEN       = "#28A745"
-GRAY        = "#555555"
-BTN_BG      = "#333333"
-BTN_HOVER   = "#444444"
+BG        = "#1a1a1a"
+BAR_BG    = "#222222"
+PANEL_BG  = "#2a2a2a"
+TEXT      = "#e8e8e8"
+SUBTEXT   = "#888888"
+ACCENT    = "#1E90FF"
+RED       = "#C70039"
+AMBER     = "#FFA500"
+GREEN     = "#28A745"
+GRAY      = "#555555"
+BTN_BG    = "#333333"
+BTN_HOVER = "#444444"
 
 DOT_COLORS = {
     "loading":      GRAY,
@@ -65,20 +88,54 @@ DOT_COLORS = {
 }
 
 
+def _create_shortcut(icon_path: str) -> None:
+    """Create/update a pinnable .lnk in the project folder. Always recreated so
+    the icon path stays current."""
+    shortcut_path = os.path.join(SCRIPT_DIR, "Whisper Transcription.lnk")
+    # When running as a compiled exe, point the shortcut at the exe itself.
+    # Otherwise, fall back to the VBS launcher.
+    if getattr(sys, 'frozen', False):
+        target = sys.executable
+    else:
+        target = os.path.join(SCRIPT_DIR, "Whisper Transcription.vbs")
+    vbs_path = target
+    ps = (
+        f"$s=(New-Object -ComObject WScript.Shell).CreateShortcut('{shortcut_path}');"
+        f"$s.TargetPath='{vbs_path}';"
+        f"$s.IconLocation='{icon_path}';"
+        f"$s.WorkingDirectory='{SCRIPT_DIR}';"
+        f"$s.Save()"
+    )
+    try:
+        _subprocess.run(
+            ["powershell", "-NoProfile", "-Command", ps],
+            creationflags=0x08000000, check=True, timeout=10
+        )
+    except Exception:
+        pass  # non-fatal
+
+
 class WhisperWidget(ctk.CTk):
     def __init__(self):
         super().__init__()
 
-        # ── window setup ───────────────────────────────────────────────────────
+        # ── window ─────────────────────────────────────────────────────────────
         self.title("Whisper Transcription")
         ctk.set_appearance_mode("dark")
         self.configure(fg_color=BG)
-        self.overrideredirect(True)
         self.attributes("-topmost", True)
+        self.minsize(480, 0)
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
 
-        # ── icon ───────────────────────────────────────────────────────────────
+        # ── icon & shortcut ────────────────────────────────────────────────────
         icon_path = icon_gen.create_icon()
-        self.iconbitmap(icon_path)
+        _register_aumid_icon(icon_path)  # tells Windows taskbar what icon to show
+        self._icon_path = icon_path
+        self._icon = ImageTk.PhotoImage(file=icon_path)  # keep ref to avoid GC
+        self._apply_icon()
+        # Re-apply after CTk's own delayed icon callbacks have fired
+        self.after(500, self._apply_icon)
+        threading.Thread(target=_create_shortcut, args=(icon_path,), daemon=True).start()
 
         # ── config ─────────────────────────────────────────────────────────────
         self.cfg = config.load()
@@ -89,31 +146,91 @@ class WhisperWidget(ctk.CTk):
         self.stream            = None
         self.model             = None
         self.device            = "cuda" if torch.cuda.is_available() else "cpu"
-        self._drag_x           = 0
-        self._drag_y           = 0
+        self._last_hwnd        = None
+        self._kb_hooks         = []
         self._listening_hotkey = False
         self._current_model    = self.cfg["model"]
 
-        # ── apply saved mute state ─────────────────────────────────────────────
-        if self.cfg["mute_beeps"]:
-            try:
-                open(MUTE_FLAG, "w").close()
-            except OSError:
-                pass
-        elif os.path.exists(MUTE_FLAG):
-            os.remove(MUTE_FLAG)
-
-        # ── build UI ───────────────────────────────────────────────────────────
+        # ── UI ─────────────────────────────────────────────────────────────────
         self._build_bar()
         self._build_panel()
         self._apply_expanded(self.cfg["expanded"], animate=False)
-
-        # ── position ───────────────────────────────────────────────────────────
         self.geometry(f"+{self.cfg['window_x']}+{self.cfg['window_y']}")
 
-        # ── background threads ─────────────────────────────────────────────────
+        # ── hotkey & model ─────────────────────────────────────────────────────
+        self._register_hotkey(self.cfg.get("hotkey", "`"))
         threading.Thread(target=self._load_model, daemon=True).start()
-        threading.Thread(target=self._flag_listener, daemon=True).start()
+
+    def _on_close(self):
+        keyboard.unhook_all()
+        self.destroy()
+
+    def _apply_icon(self):
+        """Set the window icon via Tkinter + direct Win32 WM_SETICON."""
+        try:
+            self.wm_iconbitmap()                    # clear CTk's default
+            self.iconphoto(False, self._icon)       # set via Tkinter
+        except Exception:
+            pass
+        self._apply_win32_icon()                    # belt-and-suspenders
+
+    def _apply_win32_icon(self):
+        """Send WM_SETICON directly so the taskbar button shows the mic icon."""
+        try:
+            user32 = ctypes.windll.user32
+            user32.FindWindowW.restype  = ctypes.c_void_p
+            user32.LoadImageW.restype   = ctypes.c_void_p
+            user32.SendMessageW.restype = ctypes.c_void_p
+
+            hwnd = user32.FindWindowW(None, "Whisper Transcription")
+            if not hwnd:
+                return
+            ico = self._icon_path
+            hicon_big   = user32.LoadImageW(0, ico, 1, 48, 48, 0x10)
+            hicon_small = user32.LoadImageW(0, ico, 1, 16, 16, 0x10)
+            if hicon_big:
+                user32.SendMessageW(hwnd, 0x0080, 1, hicon_big)   # ICON_BIG
+            if hicon_small:
+                user32.SendMessageW(hwnd, 0x0080, 0, hicon_small) # ICON_SMALL
+        except Exception:
+            pass
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # Global hotkey (keyboard library)
+    # ══════════════════════════════════════════════════════════════════════════
+
+    def _register_hotkey(self, key: str):
+        for h in self._kb_hooks:
+            try:
+                keyboard.unhook(h)
+            except Exception:
+                pass
+        self._kb_hooks = []
+        try:
+            self._kb_hooks.append(
+                keyboard.on_press_key(key, self._on_hotkey_press, suppress=True)
+            )
+            self._kb_hooks.append(
+                keyboard.on_release_key(key, self._on_hotkey_release, suppress=True)
+            )
+        except Exception as exc:
+            self.after(0, self._set_status, f"Hotkey error: {exc}", "error")
+
+    def _on_hotkey_press(self, _e):
+        if not self.cfg["mic_enabled"] or self.is_recording:
+            return
+        # Capture the active window NOW, before any focus changes
+        self._last_hwnd = ctypes.windll.user32.GetForegroundWindow()
+        self.after(0, self._begin_recording)
+
+    def _on_hotkey_release(self, _e):
+        if self.is_recording:
+            self.after(0, self.stop_recording)
+
+    def _begin_recording(self):
+        if not self.cfg["mute_beeps"]:
+            threading.Thread(target=lambda: winsound.Beep(750, 100), daemon=True).start()
+        self.start_recording()
 
     # ══════════════════════════════════════════════════════════════════════════
     # UI construction
@@ -128,20 +245,17 @@ class WhisperWidget(ctk.CTk):
         self.bar.bind("<B1-Motion>",       self._drag_move)
         self.bar.bind("<ButtonRelease-1>", self._drag_end)
 
-        # status dot
         self.dot_canvas = tk.Canvas(self.bar, width=14, height=14,
-                                     bg=BAR_BG, highlightthickness=0)
+                                    bg=BAR_BG, highlightthickness=0)
         self.dot_canvas.pack(side="left", padx=(10, 4), pady=15)
         self.dot_id = self.dot_canvas.create_oval(1, 1, 13, 13, fill=GRAY, outline="")
 
-        # status label — also draggable
         self.status_lbl = ctk.CTkLabel(self.bar, text="Loading...", text_color=SUBTEXT,
-                                        font=("Segoe UI", 11), anchor="w", width=130)
+                                       font=("Segoe UI", 11), anchor="w", width=130)
         self.status_lbl.pack(side="left", padx=(0, 6))
         self.status_lbl.bind("<ButtonPress-1>", self._drag_start)
         self.status_lbl.bind("<B1-Motion>",     self._drag_move)
 
-        # mic toggle
         self.mic_btn = ctk.CTkButton(
             self.bar, text="🎤", width=32, height=28,
             fg_color=ACCENT if self.cfg["mic_enabled"] else BTN_BG,
@@ -150,7 +264,6 @@ class WhisperWidget(ctk.CTk):
         )
         self.mic_btn.pack(side="left", padx=2)
 
-        # mute toggle
         self.mute_btn = ctk.CTkButton(
             self.bar, text="🔇" if self.cfg["mute_beeps"] else "🔊",
             width=32, height=28,
@@ -159,7 +272,6 @@ class WhisperWidget(ctk.CTk):
         )
         self.mute_btn.pack(side="left", padx=2)
 
-        # hotkey button
         self.hotkey_btn = ctk.CTkButton(
             self.bar, text=f"⌨ {self.cfg.get('hotkey', '`')}",
             width=54, height=28,
@@ -168,7 +280,6 @@ class WhisperWidget(ctk.CTk):
         )
         self.hotkey_btn.pack(side="left", padx=2)
 
-        # model dropdown
         self.model_var = ctk.StringVar(value=self.cfg["model"])
         self.model_menu = ctk.CTkOptionMenu(
             self.bar, values=ALL_MODELS, variable=self.model_var,
@@ -179,7 +290,6 @@ class WhisperWidget(ctk.CTk):
         )
         self.model_menu.pack(side="left", padx=2)
 
-        # expand/collapse
         self.expand_btn = ctk.CTkButton(
             self.bar, text="▼" if not self.cfg["expanded"] else "▲",
             width=28, height=28,
@@ -187,13 +297,6 @@ class WhisperWidget(ctk.CTk):
             command=self._toggle_expand, font=("Segoe UI", 11)
         )
         self.expand_btn.pack(side="left", padx=2)
-
-        # close
-        ctk.CTkButton(
-            self.bar, text="✕", width=28, height=28,
-            fg_color=BTN_BG, hover_color="#8B0000", corner_radius=6,
-            command=self._hide, font=("Segoe UI", 11)
-        ).pack(side="left", padx=(2, 8))
 
     def _build_panel(self):
         self.panel = ctk.CTkFrame(self, fg_color=PANEL_BG, corner_radius=8)
@@ -245,16 +348,7 @@ class WhisperWidget(ctk.CTk):
     def _toggle_mute(self):
         self.cfg["mute_beeps"] = not self.cfg["mute_beeps"]
         config.save(self.cfg)
-        if self.cfg["mute_beeps"]:
-            try:
-                open(MUTE_FLAG, "w").close()
-            except OSError:
-                pass
-            self.mute_btn.configure(text="🔇")
-        else:
-            if os.path.exists(MUTE_FLAG):
-                os.remove(MUTE_FLAG)
-            self.mute_btn.configure(text="🔊")
+        self.mute_btn.configure(text="🔇" if self.cfg["mute_beeps"] else "🔊")
 
     def _start_hotkey_capture(self):
         if self._listening_hotkey:
@@ -274,10 +368,7 @@ class WhisperWidget(ctk.CTk):
         config.save(self.cfg)
         self.hotkey_btn.configure(text=f"⌨ {display}")
         self.unbind("<KeyPress>")
-        try:
-            open(HOTKEY_FLAG, "w").close()
-        except OSError:
-            self.hotkey_btn.configure(text=f"⌨ {display}")
+        self._register_hotkey(display)
 
     def _on_model_change(self, new_model: str):
         if new_model == self._current_model:
@@ -300,13 +391,6 @@ class WhisperWidget(ctk.CTk):
         else:
             self.panel.pack_forget()
             self.expand_btn.configure(text="▼")
-
-    def _hide(self):
-        self.withdraw()
-
-    def show(self):
-        self.deiconify()
-        self.attributes("-topmost", True)
 
     def _copy(self):
         text = self.text_box.get("1.0", "end").strip()
@@ -334,7 +418,7 @@ class WhisperWidget(ctk.CTk):
         self.after(0, self._set_status, f"Loading {name}...", "loading")
         try:
             self.model = whisper.load_model(name, device=self.device,
-                                             download_root=MODELS_DIR)
+                                            download_root=MODELS_DIR)
             if not self.cfg["mic_enabled"]:
                 self.after(0, self._set_status, "Mic off", "mic_off")
             else:
@@ -352,9 +436,7 @@ class WhisperWidget(ctk.CTk):
             self.recording_data.append(indata.copy())
 
     def start_recording(self):
-        if self.is_recording or self.model is None:
-            return
-        if not self.cfg["mic_enabled"]:
+        if self.is_recording or self.model is None or not self.cfg["mic_enabled"]:
             return
         self.is_recording   = True
         self.recording_data = []
@@ -373,65 +455,73 @@ class WhisperWidget(ctk.CTk):
             self.stream.stop()
             self.stream.close()
             self.stream = None
-        data = self.recording_data
+        data  = self.recording_data
         self.recording_data = []
         model = self.model
+        hwnd  = self._last_hwnd
+        if not self.cfg["mute_beeps"]:
+            threading.Thread(target=lambda: winsound.Beep(500, 100), daemon=True).start()
         if data and model is not None:
             self._set_status("Transcribing...", "transcribing")
-            threading.Thread(target=self._transcribe, args=(data, model), daemon=True).start()
+            threading.Thread(
+                target=self._transcribe, args=(data, model, hwnd), daemon=True
+            ).start()
         else:
             self._set_status("Ready", "ready")
 
-    def _transcribe(self, data, model):
+    def _transcribe(self, data, model, hwnd):
         try:
             audio = np.concatenate(data, axis=0)
             write(OUTPUT_AUDIO, SAMPLE_RATE, audio)
             result = model.transcribe(
                 OUTPUT_AUDIO,
                 fp16=torch.cuda.is_available(),
-                no_speech_threshold=0.6,
+                no_speech_threshold=0.75,
+                condition_on_previous_text=False,
             )
             text = result["text"].strip()
-            # Filter Whisper hallucinations that appear on silence/short audio
             HALLUCINATIONS = {
-                "thank you.", "thanks for watching.", "thanks for watching!",
+                "thanks for watching.", "thanks for watching!",
                 "thank you for watching.", "thank you for watching!",
-                "you", "thank you", "thanks.",
             }
             if text.lower() in HALLUCINATIONS:
                 text = ""
-            self.after(0, self._show_result, text)
+            self.after(0, self._show_result, text, hwnd)
         except Exception as exc:
             self.after(0, self._set_status, f"Failed: {exc}", "error")
 
-    def _show_result(self, text: str):
+    def _show_result(self, text: str, hwnd: int):
         self.text_box.delete("1.0", "end")
         self.text_box.insert("end", text)
         self._set_status("Done", "ready")
-        with open(OUTPUT_TXT, "w", encoding="utf-8") as f:
-            f.write(text)
+        if text and hwnd:
+            self._paste(text, hwnd)
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # Flag listener
-    # ══════════════════════════════════════════════════════════════════════════
+    def _paste(self, text: str, hwnd: int):
+        # Write to clipboard
+        self.clipboard_clear()
+        self.clipboard_append(text)
+        self.update()  # flush clipboard to OS
 
-    def _flag_listener(self):
-        while True:
-            if os.path.exists(START_FLAG):
-                os.remove(START_FLAG)
-                self.after(0, self.start_recording)
+        # Restore focus to the original window.
+        # AttachThreadInput is required to override Windows' focus-lock rules.
+        user32  = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
+        fg_win  = user32.GetForegroundWindow()
+        fg_tid  = user32.GetWindowThreadProcessId(fg_win, None)
+        my_tid  = kernel32.GetCurrentThreadId()
+        user32.AttachThreadInput(my_tid, fg_tid, True)
+        user32.SetForegroundWindow(hwnd)
+        user32.BringWindowToTop(hwnd)
+        user32.AttachThreadInput(my_tid, fg_tid, False)
 
-            if os.path.exists(STOP_FLAG):
-                os.remove(STOP_FLAG)
-                self.after(0, self.stop_recording)
-
-            if os.path.exists(SHOW_FLAG):
-                os.remove(SHOW_FLAG)
-                self.after(0, self.show)
-
-            time.sleep(0.02)
+        time.sleep(0.15)
+        keyboard.send("ctrl+v")
+        time.sleep(0.3)
 
 
 if __name__ == "__main__":
+    import multiprocessing
+    multiprocessing.freeze_support()
     app = WhisperWidget()
     app.mainloop()
