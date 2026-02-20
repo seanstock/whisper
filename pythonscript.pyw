@@ -389,7 +389,6 @@ class WhisperWidget(ctk.CTk):
             result = model.transcribe(
                 OUTPUT_AUDIO,
                 fp16=torch.cuda.is_available(),
-                condition_on_previous_text=False,
                 no_speech_threshold=0.6,
             )
             text = result["text"].strip()
