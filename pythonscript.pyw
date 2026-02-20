@@ -386,9 +386,21 @@ class WhisperWidget(ctk.CTk):
         try:
             audio = np.concatenate(data, axis=0)
             write(OUTPUT_AUDIO, SAMPLE_RATE, audio)
-            result = model.transcribe(OUTPUT_AUDIO,
-                                       fp16=torch.cuda.is_available())
+            result = model.transcribe(
+                OUTPUT_AUDIO,
+                fp16=torch.cuda.is_available(),
+                condition_on_previous_text=False,
+                no_speech_threshold=0.6,
+            )
             text = result["text"].strip()
+            # Filter Whisper hallucinations that appear on silence/short audio
+            HALLUCINATIONS = {
+                "thank you.", "thanks for watching.", "thanks for watching!",
+                "thank you for watching.", "thank you for watching!",
+                "you", "thank you", "thanks.",
+            }
+            if text.lower() in HALLUCINATIONS:
+                text = ""
             self.after(0, self._show_result, text)
         except Exception as exc:
             self.after(0, self._set_status, f"Failed: {exc}", "error")
