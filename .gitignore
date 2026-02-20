@@ -3,7 +3,16 @@ whisper-env/
 
 # Ignore temporary audio files
 *.wav
+recorded.wav
 
 # Ignore transcription output files
 *.txt
 !requirements.txt
+output.txt
+
+# Ignore generated icon
+icon.ico
+
+# Ignore Python bytecode
+__pycache__/
+*.pyc
