@@ -4,7 +4,9 @@ Optimized for agentic coding workflows; not designed for ADA compliance.
 
 Hold a hotkey anywhere on Windows → release → transcribed text is pasted into the previously active window. Powered by OpenAI Whisper running locally.
 
-![Whisper For Windows](Whisper-For-Windows.png)
+<p align="center">
+  <img src="Whisper-For-Windows.png" alt="Whisper For Windows">
+</p>
 
 ## Features
 
