@@ -1,7 +1,13 @@
 import json
 import os
+import sys
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+if getattr(sys, 'frozen', False):
+    _exe_dir = os.path.dirname(sys.executable)
+    SCRIPT_DIR = os.path.dirname(_exe_dir) if not os.path.exists(
+        os.path.join(_exe_dir, 'config.py')) else _exe_dir
+else:
+    SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(SCRIPT_DIR, "config.json")
 
 DEFAULTS = {

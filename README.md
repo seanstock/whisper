@@ -9,63 +9,68 @@ Hold a hotkey anywhere on Windows → release → transcribed text is pasted int
 - **Floating widget** — always-on-top dark bar that stays out of the way until you need it
 - **Hold-to-record** — hold the hotkey (default: backtick) to record, release to transcribe and paste
 - **GPU accelerated** — automatically uses CUDA if an NVIDIA GPU is available, otherwise falls back to CPU
-- **Local model storage** — models are saved to the `models/` folder; turbo is pre-downloaded, others download on first use
+- **Local model storage** — models are saved to the `models/` folder and download on first use
 - **In-widget controls** — mic toggle, mute toggle, hotkey rebinder, model selector, expand/collapse, copy button
 - **Persistent config** — window position, model choice, mute state, and hotkey survive restarts
 
-## Prerequisites
+## Quick Start (Pre-built)
 
-1. **Python 3.9+** — must be on your system PATH
-2. **AutoHotkey v2** — [autohotkey.com](https://www.autohotkey.com/)
-3. **FFmpeg** — required by Whisper for audio processing:
+1. Download the latest release zip from [Releases](https://github.com/seanstock/whisper/releases)
+2. Extract it anywhere
+3. Run `Whisper Transcription/Whisper Transcription.exe`
+4. A shortcut is auto-created in the project folder on first launch
+
+**Requirement:** [FFmpeg](https://ffmpeg.org/) must be on your system PATH (e.g. `choco install ffmpeg -y`).
+
+## Build from Source
+
+1. Clone the repo and create a virtual environment:
    ```powershell
-   choco install ffmpeg -y
-   ```
-
-## Setup
-
-1. Clone or download the repository.
-2. Create and activate a virtual environment:
-   ```powershell
+   git clone https://github.com/seanstock/whisper.git
+   cd whisper
    python -m venv whisper-env
    .\whisper-env\Scripts\Activate.ps1
    ```
-3. Install dependencies:
+2. Install dependencies:
    ```powershell
    pip install -r requirements.txt
    ```
+3. Build the exe:
+   ```powershell
+   pyinstaller -y --noconsole --onedir --icon=icon.ico --name "Whisper Transcription" --distpath . --collect-all torch --collect-all whisper --collect-data certifi pythonscript.pyw
+   ```
+4. Run `Whisper Transcription/Whisper Transcription.exe`
 
 ## How to Use
 
-1. **Start the script** — double-click `whisper.ahk`. An AHK icon appears in the system tray and the floating widget opens automatically.
-2. **Position the widget** — drag it anywhere by its title bar. Position is saved on release.
+1. **Launch the exe** — double-click `Whisper Transcription.exe` (inside the `Whisper Transcription/` folder). A floating widget appears.
+2. **Position the widget** — drag it anywhere by its bar. Position is saved on release.
 3. **Transcribe** — click into any text field, then hold the hotkey (default: backtick). The dot turns red while recording. Release the key; the dot turns amber while transcribing, then the text is pasted into the window you were in.
-4. **Show the widget** — press `Alt+G` if you closed or lost the widget.
 
 ## Widget Controls
 
 | Control | Description |
 |---|---|
 | Status dot | Gray = loading, Green = ready, Red = recording, Amber = transcribing |
-| Mic button (🎤) | Enable or disable recording |
-| Mute button (🔊/🔇) | Silence the start/stop beeps |
-| Hotkey button (⌨) | Click, then press any key to reassign the record hotkey |
-| Model dropdown | Switch Whisper model; new model loads immediately |
-| Expand/Collapse (▼/▲) | Show or hide the transcript text box |
+| Mic button | Enable or disable recording |
+| Mute button | Silence the start/stop beeps |
+| Hotkey button | Click, then press any key to reassign the record hotkey |
+| Model dropdown | Switch Whisper model (VRAM estimates shown); ★ = recommended |
+| Expand/Collapse | Show or hide the transcript text box |
 | Copy button | Copy the last transcript to the clipboard |
-| X button | Hide the widget (it keeps running; use Alt+G to restore) |
 
 ## Models
 
-| Model | Speed | Accuracy | Notes |
+| Model | VRAM | Speed | Accuracy |
 |---|---|---|---|
-| turbo | Fastest | High | Pre-downloaded to `models/` |
-| medium.en | Fast | High | English only |
-| small.en | Very fast | Good | English only |
-| base.en | Fastest | Adequate | English only |
-| large-v3 | Slow | Best | Downloads on first use (~3 GB) |
+| tiny.en | ~1 GB | Fastest | Basic |
+| base.en | ~1 GB | Very fast | Good |
+| small.en ★ | ~2 GB | Fast | Better |
+| medium.en | ~5 GB | Moderate | High |
+| turbo ★ | ~6 GB | Fast | High |
+| large-v3 | ~10 GB | Slow | Best |
 
-All models are stored in the `models/` folder. Switching models in the dropdown triggers an immediate download if the model is not already cached.
+★ = recommended. **small.en** is the best pick for GPUs with 8 GB VRAM or less — fast and accurate for everyday dictation. If you have 10 GB+ VRAM, **turbo** delivers near-large-v3 accuracy at much higher speed. Models download automatically on first use and are stored in the `models/` folder.
 
 ## Configuration
 

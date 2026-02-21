@@ -1,8 +1,18 @@
 # Suppress console windows spawned by ffmpeg (called internally by whisper)
-import os
+import os, sys
 import subprocess as _subprocess
 import ctypes as _ctypes
-import winreg as _winreg
+
+# PyInstaller --noconsole sets stdout/stderr to None, which crashes tqdm
+# (used by whisper's model downloader) and any other library that writes to stderr.
+if getattr(sys, 'frozen', False):
+    if sys.stdout is None:
+        sys.stdout = open(os.devnull, 'w')
+    if sys.stderr is None:
+        sys.stderr = open(os.devnull, 'w')
+    # Ensure HTTPS downloads work by pointing SSL at bundled certificates
+    import ssl, certifi
+    ssl._create_default_https_context = lambda: ssl.create_default_context(cafile=certifi.where())
 
 _AUMID = "WhisperTranscription.1"
 
@@ -18,29 +28,15 @@ if os.name == 'nt':
     # Must be called BEFORE the window is created so Windows uses it from the start.
     _ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(_AUMID)
 
-def _register_aumid_icon(icon_path: str) -> None:
-    """Write HKCU registry entry so Windows knows what icon to show for our AUMID."""
-    key_path = f"SOFTWARE\\Classes\\AppUserModelId\\{_AUMID}"
-    try:
-        key = _winreg.CreateKeyEx(
-            _winreg.HKEY_CURRENT_USER, key_path, 0,
-            _winreg.KEY_SET_VALUE | _winreg.KEY_WOW64_64KEY
-        )
-        _winreg.SetValueEx(key, "DisplayName", 0, _winreg.REG_SZ, "Whisper Transcription")
-        _winreg.SetValueEx(key, "IconUri", 0, _winreg.REG_EXPAND_SZ, icon_path)
-        _winreg.CloseKey(key)
-    except Exception:
-        pass
-
 import customtkinter as ctk
 import tkinter as tk
 from PIL import ImageTk
 import sounddevice as sd
-from scipy.io.wavfile import write
+from scipy.io.wavfile import write as write_wav
 import whisper
 import threading
 import numpy as np
-import sys, torch, time, ctypes, winsound, keyboard
+import torch, time, ctypes, winsound, keyboard
 import config
 import icon_gen
 
@@ -62,7 +58,25 @@ SAMPLE_RATE = 16000
 CHANNELS    = 1
 DTYPE       = 'int16'
 
-ALL_MODELS = ["tiny.en", "base.en", "small.en", "medium.en", "turbo", "large-v3"]
+ALL_MODELS = [
+    "tiny.en (~1 GB VRAM)",
+    "base.en (~1 GB)",
+    "small.en (~2 GB) ★",
+    "medium.en (~5 GB)",
+    "turbo (~6 GB) ★",
+    "large-v3 (~10 GB)",
+]
+
+def _model_id(display_name: str) -> str:
+    """Extract the model ID from a display name like 'base.en (~1 GB) ★'."""
+    return display_name.split("(")[0].strip().rstrip("★").strip()
+
+def _model_display(model_id: str) -> str:
+    """Find the display name for a model ID, or return the ID as-is."""
+    for name in ALL_MODELS:
+        if _model_id(name) == model_id:
+            return name
+    return model_id
 
 # ── colours ────────────────────────────────────────────────────────────────────
 BG        = "#1a1a1a"
@@ -92,16 +106,13 @@ def _create_shortcut(icon_path: str) -> None:
     """Create/update a pinnable .lnk in the project folder. Always recreated so
     the icon path stays current."""
     shortcut_path = os.path.join(SCRIPT_DIR, "Whisper Transcription.lnk")
-    # When running as a compiled exe, point the shortcut at the exe itself.
-    # Otherwise, fall back to the VBS launcher.
     if getattr(sys, 'frozen', False):
         target = sys.executable
     else:
-        target = os.path.join(SCRIPT_DIR, "Whisper Transcription.vbs")
-    vbs_path = target
+        target = os.path.join(SCRIPT_DIR, "pythonscript.pyw")
     ps = (
         f"$s=(New-Object -ComObject WScript.Shell).CreateShortcut('{shortcut_path}');"
-        f"$s.TargetPath='{vbs_path}';"
+        f"$s.TargetPath='{target}';"
         f"$s.IconLocation='{icon_path}';"
         f"$s.WorkingDirectory='{SCRIPT_DIR}';"
         f"$s.Save()"
@@ -129,12 +140,9 @@ class WhisperWidget(ctk.CTk):
 
         # ── icon & shortcut ────────────────────────────────────────────────────
         icon_path = icon_gen.create_icon()
-        _register_aumid_icon(icon_path)  # tells Windows taskbar what icon to show
-        self._icon_path = icon_path
         self._icon = ImageTk.PhotoImage(file=icon_path)  # keep ref to avoid GC
         self._apply_icon()
-        # Re-apply after CTk's own delayed icon callbacks have fired
-        self.after(500, self._apply_icon)
+        self.after(500, self._apply_icon)  # re-apply after CTk's delayed icon callbacks
         threading.Thread(target=_create_shortcut, args=(icon_path,), daemon=True).start()
 
         # ── config ─────────────────────────────────────────────────────────────
@@ -154,7 +162,7 @@ class WhisperWidget(ctk.CTk):
         # ── UI ─────────────────────────────────────────────────────────────────
         self._build_bar()
         self._build_panel()
-        self._apply_expanded(self.cfg["expanded"], animate=False)
+        self._apply_expanded(self.cfg["expanded"])
         self.geometry(f"+{self.cfg['window_x']}+{self.cfg['window_y']}")
 
         # ── hotkey & model ─────────────────────────────────────────────────────
@@ -166,32 +174,10 @@ class WhisperWidget(ctk.CTk):
         self.destroy()
 
     def _apply_icon(self):
-        """Set the window icon via Tkinter + direct Win32 WM_SETICON."""
+        """Set the window icon via Tkinter."""
         try:
             self.wm_iconbitmap()                    # clear CTk's default
             self.iconphoto(False, self._icon)       # set via Tkinter
-        except Exception:
-            pass
-        self._apply_win32_icon()                    # belt-and-suspenders
-
-    def _apply_win32_icon(self):
-        """Send WM_SETICON directly so the taskbar button shows the mic icon."""
-        try:
-            user32 = ctypes.windll.user32
-            user32.FindWindowW.restype  = ctypes.c_void_p
-            user32.LoadImageW.restype   = ctypes.c_void_p
-            user32.SendMessageW.restype = ctypes.c_void_p
-
-            hwnd = user32.FindWindowW(None, "Whisper Transcription")
-            if not hwnd:
-                return
-            ico = self._icon_path
-            hicon_big   = user32.LoadImageW(0, ico, 1, 48, 48, 0x10)
-            hicon_small = user32.LoadImageW(0, ico, 1, 16, 16, 0x10)
-            if hicon_big:
-                user32.SendMessageW(hwnd, 0x0080, 1, hicon_big)   # ICON_BIG
-            if hicon_small:
-                user32.SendMessageW(hwnd, 0x0080, 0, hicon_small) # ICON_SMALL
         except Exception:
             pass
 
@@ -280,10 +266,10 @@ class WhisperWidget(ctk.CTk):
         )
         self.hotkey_btn.pack(side="left", padx=2)
 
-        self.model_var = ctk.StringVar(value=self.cfg["model"])
+        self.model_var = ctk.StringVar(value=_model_display(self.cfg["model"]))
         self.model_menu = ctk.CTkOptionMenu(
             self.bar, values=ALL_MODELS, variable=self.model_var,
-            width=100, height=28, corner_radius=6,
+            width=170, height=28, corner_radius=6,
             fg_color=BTN_BG, button_color=BTN_BG, button_hover_color=BTN_HOVER,
             dropdown_fg_color=PANEL_BG, font=("Segoe UI", 11),
             command=self._on_model_change
@@ -370,7 +356,8 @@ class WhisperWidget(ctk.CTk):
         self.unbind("<KeyPress>")
         self._register_hotkey(display)
 
-    def _on_model_change(self, new_model: str):
+    def _on_model_change(self, display_name: str):
+        new_model = _model_id(display_name)
         if new_model == self._current_model:
             return
         self._current_model = new_model
@@ -384,7 +371,7 @@ class WhisperWidget(ctk.CTk):
         config.save(self.cfg)
         self._apply_expanded(self.cfg["expanded"])
 
-    def _apply_expanded(self, expanded: bool, animate: bool = True):
+    def _apply_expanded(self, expanded: bool):
         if expanded:
             self.panel.pack(fill="x", padx=4, pady=(0, 4))
             self.expand_btn.configure(text="▲")
@@ -472,7 +459,7 @@ class WhisperWidget(ctk.CTk):
     def _transcribe(self, data, model, hwnd):
         try:
             audio = np.concatenate(data, axis=0)
-            write(OUTPUT_AUDIO, SAMPLE_RATE, audio)
+            write_wav(OUTPUT_AUDIO, SAMPLE_RATE, audio)
             result = model.transcribe(
                 OUTPUT_AUDIO,
                 fp16=torch.cuda.is_available(),

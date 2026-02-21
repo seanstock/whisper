@@ -1,30 +1,27 @@
-# Ignore Python virtual environment
+# Python virtual environment
 whisper-env/
 
-# Ignore temporary audio files
+# Temporary audio files
 *.wav
-recorded.wav
 
-# Ignore transcription output files
+# Transcription output files
 *.txt
 !requirements.txt
-output.txt
 
-# Ignore generated icon
+# Generated icon
 icon.ico
 
-# Ignore Python bytecode
+# Python bytecode
 __pycache__/
 *.pyc
 
 # PyInstaller build artifacts
 build/
-*.spec
 dist/
+*.spec
 
 # Built app (onedir output)
 Whisper Transcription/
-Whisper Transcription Debug/
 
 # Whisper model cache
 models/
@@ -32,8 +29,6 @@ models/
 # Windows shortcut (auto-created by the app)
 *.lnk
 
-# Debug log
+# Runtime files
 debug.log
-
-# User config (window position, etc.)
 config.json
