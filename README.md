@@ -13,21 +13,18 @@ Hold a hotkey anywhere on Windows → release → transcribed text is pasted int
 - **In-widget controls** — mic toggle, mute toggle, hotkey rebinder, model selector, expand/collapse, copy button
 - **Persistent config** — window position, model choice, mute state, and hotkey survive restarts
 
-## Quick Start (Pre-built)
+## Prerequisites
 
-1. Download the latest release zip from [Releases](https://github.com/seanstock/whisper/releases)
-2. Extract it anywhere
-3. Run `Whisper Transcription/Whisper Transcription.exe`
-4. A shortcut is auto-created in the project folder on first launch
+- **Python 3.9+**
+- **NVIDIA GPU** recommended (CUDA) — CPU works but transcription is much slower
+- **[FFmpeg](https://ffmpeg.org/)** on your system PATH (`choco install ffmpeg -y`)
 
-**Requirement:** [FFmpeg](https://ffmpeg.org/) must be on your system PATH (e.g. `choco install ffmpeg -y`).
-
-## Build from Source
+## Setup
 
 1. Clone the repo and create a virtual environment:
    ```powershell
-   git clone https://github.com/seanstock/whisper.git
-   cd whisper
+   git clone https://github.com/seanstock/whisper-for-windows.git
+   cd whisper-for-windows
    python -m venv whisper-env
    .\whisper-env\Scripts\Activate.ps1
    ```
@@ -39,11 +36,11 @@ Hold a hotkey anywhere on Windows → release → transcribed text is pasted int
    ```powershell
    pyinstaller -y --noconsole --onedir --icon=icon.ico --name "Whisper Transcription" --distpath . --collect-all torch --collect-all whisper --collect-data certifi pythonscript.pyw
    ```
-4. Run `Whisper Transcription/Whisper Transcription.exe`
+4. Launch `Whisper Transcription\Whisper Transcription.exe`
 
 ## How to Use
 
-1. **Launch the exe** — double-click `Whisper Transcription.exe` (inside the `Whisper Transcription/` folder). A floating widget appears.
+1. **Launch** — run `Whisper Transcription\Whisper Transcription.exe`. A floating widget appears. A desktop shortcut is auto-created on first launch.
 2. **Position the widget** — drag it anywhere by its bar. Position is saved on release.
 3. **Transcribe** — click into any text field, then hold the hotkey (default: backtick). The dot turns red while recording. Release the key; the dot turns amber while transcribing, then the text is pasted into the window you were in.
 
